@@ -1,10 +1,11 @@
 <script>
 	import { BOX_SIZE } from '@sudoku/constants';
 	import { gamePaused } from '@sudoku/stores/game';
-	import { grid, userGrid, invalidCells } from '@sudoku/stores/grid';
+	import { puzzleGrid, userGrid, invalidCells } from '@sudoku/stores/grid';
 	import { settings } from '@sudoku/stores/settings';
 	import { cursor } from '@sudoku/stores/cursor';
 	import { candidates } from '@sudoku/stores/candidates';
+	import { highlight } from '@sudoku/stores/highlight';
 	import Cell from './Cell.svelte';
 
 	function isSelected(cursorStore, x, y) {
@@ -27,6 +28,14 @@
 
 		return gridStore[cursorStore.y][cursorStore.x];
 	}
+
+	function isHighlighted(highlightStore, x, y) {
+		return highlightStore.cells.some((cell) => cell.row === y && cell.col === x);
+	}
+
+	function isPrimaryHighlight(highlightStore, x, y) {
+		return highlightStore.primaryCell?.row === y && highlightStore.primaryCell?.col === x;
+	}
 </script>
 
 <div class="board-padding relative z-10">
@@ -45,10 +54,13 @@
 					      candidates={$candidates[x + ',' + y]}
 					      disabled={$gamePaused}
 					      selected={isSelected($cursor, x, y)}
-					      userNumber={$grid[y][x] === 0}
+					      highlighted={isHighlighted($highlight, x, y)}
+					      primaryHighlight={isPrimaryHighlight($highlight, x, y)}
+					      highlightKind={$highlight.kind}
+					      userNumber={$puzzleGrid[y][x] === 0}
 					      sameArea={$settings.highlightCells && !isSelected($cursor, x, y) && isSameArea($cursor, x, y)}
 					      sameNumber={$settings.highlightSame && value && !isSelected($cursor, x, y) && getValueAtCursor($userGrid, $cursor) === value}
-					      conflictingNumber={$settings.highlightConflicting && $grid[y][x] === 0 && $invalidCells.includes(x + ',' + y)} />
+					      conflictingNumber={$settings.highlightConflicting && $puzzleGrid[y][x] === 0 && $invalidCells.includes(x + ',' + y)} />
 				{/each}
 			{/each}
 

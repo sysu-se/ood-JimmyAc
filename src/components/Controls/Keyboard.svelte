@@ -3,25 +3,39 @@
 	import { cursor } from '@sudoku/stores/cursor';
 	import { notes } from '@sudoku/stores/notes';
 	import { candidates } from '@sudoku/stores/candidates';
+import { feedback } from '@sudoku/stores/feedback';
+import { highlight } from '@sudoku/stores/highlight';
 
 	// TODO: Improve keyboardDisabled
 	import { keyboardDisabled } from '@sudoku/stores/keyboard';
 
 	function handleKeyButton(num) {
 		if (!$keyboardDisabled) {
+			let result;
+
 			if ($notes) {
 				if (num === 0) {
 					candidates.clear($cursor);
 				} else {
 					candidates.add($cursor, num);
 				}
-				userGrid.set($cursor, 0);
+				result = userGrid.guess($cursor, 0);
 			} else {
 				if ($candidates.hasOwnProperty($cursor.x + ',' + $cursor.y)) {
 					candidates.clear($cursor);
 				}
 
-				userGrid.set($cursor, num);
+				result = userGrid.guess($cursor, num);
+			}
+
+			if (result?.ok) {
+				feedback.info(result.message);
+				highlight.focus(result.focusCell, 'fill');
+			} else if (result) {
+				feedback.error(result.message ?? 'Input rejected.');
+				if (result.focusCell) {
+					highlight.focus(result.focusCell, 'failed-path');
+				}
 			}
 		}
 	}

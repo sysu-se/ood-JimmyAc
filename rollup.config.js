@@ -17,7 +17,6 @@ const preprocess = sveltePreprocess({
 			require('postcss-import'),
 			require('tailwindcss'),
 			require('autoprefixer'),
-			...(production ? [require('postcss-clean')] : []),
 		],
 	},
 	defaults: {
@@ -53,12 +52,15 @@ export default {
 
 		css({
 			output: !production ? 'bundle.css' : (styles, styleNodes) => {
+				let criticalStyles = styles;
+
 				for (let filename of Object.keys(styleNodes)) {
 					if (filename.endsWith('App.css')) {
-						writeFileSync('./dist/critical.css', styleNodes[filename]);
+						criticalStyles = styleNodes[filename];
 					}
 				}
 
+				writeFileSync('./dist/critical.css', criticalStyles);
 				writeFileSync('./dist/bundle.css', styles);
 			},
 		}),
