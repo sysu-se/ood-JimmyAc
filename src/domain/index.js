@@ -247,6 +247,10 @@ function cloneExplorePath(path) {
 	}));
 }
 
+function serializeExplorePath(path) {
+	return JSON.stringify(cloneExplorePath(path));
+}
+
 function cloneExploreHistoryStack(stack) {
 	return stack.map((checkpoint) => ({
 		sudoku: checkpoint.sudoku.clone(),
@@ -404,10 +408,6 @@ function createSudokuInstance(input, { givens } = {}) {
 				row: fullHint.row,
 				col: fullHint.col,
 				detailLevel: fullHint.detailLevel,
-				type: fullHint.type,
-				kind: fullHint.kind,
-				canApplyDirectly: fullHint.canApplyDirectly,
-				reason: fullHint.reason,
 			};
 		}
 
@@ -416,11 +416,7 @@ function createSudokuInstance(input, { givens } = {}) {
 				row: fullHint.row,
 				col: fullHint.col,
 				detailLevel: fullHint.detailLevel,
-				type: fullHint.type,
-				kind: fullHint.kind,
 				candidateCount: fullHint.candidateCount,
-				canApplyDirectly: fullHint.canApplyDirectly,
-				reason: fullHint.reason,
 			};
 		}
 
@@ -546,6 +542,10 @@ function createGameInstance({ sudoku, undoStack = [], redoStack = [], explore = 
 	const historyUndo = cloneSnapshotStack(undoStack);
 	const historyRedo = cloneSnapshotStack(redoStack);
 	const decisionPointBook = new Map();
+	const failedBoardStates = new Set(explore?.failedBoardStates ?? []);
+	const failedExplorePaths = new Set(explore?.failedExplorePaths ?? []);
+	let newlyRecordedFailureState = explore?.newlyRecordedFailureState ?? null;
+	let newlyRecordedFailurePath = explore?.newlyRecordedFailurePath ?? null;
 
 	for (const decisionPoint of explore?.decisionPoints ?? []) {
 		decisionPointBook.set(decisionPoint.key, cloneDecisionPointRecord(decisionPoint));
@@ -590,12 +590,12 @@ function createGameInstance({ sudoku, undoStack = [], redoStack = [], explore = 
 		return getActiveSudokuInstance().getInvalidCells();
 	}
 
-	function isWon() {
-		return getActiveSudokuInstance().isWon();
+	function isWon() { return getActiveSudokuInstance().isWon(); } function isMainWon() { return currentSudoku.isWon(); } function getHint(options = {}) {
+		return getActiveSudokuInstance().getNextHint(options);
 	}
 
-	function getHint(options = {}) {
-		return getActiveSudokuInstance().getNextHint(options);
+	function getCandidates(row, col) {
+		return getActiveSudokuInstance().getCandidates(row, col);
 	}
 
 	function canUndo() {
@@ -680,6 +680,10 @@ function createGameInstance({ sudoku, undoStack = [], redoStack = [], explore = 
 	}
 
 	function guess(move) {
+		if (isExploring()) {
+			return exploreGuess(move);
+		}
+
 		if (!currentSudoku.canGuess(move)) {
 			throw new DomainValidationError('Illegal game move');
 		}
@@ -706,8 +710,37 @@ function createGameInstance({ sudoku, undoStack = [], redoStack = [], explore = 
 		return null;
 	}
 
-	function rememberFailedExploreBranch() {
-		if (!isExploring() || getImmediateExploreFailureReason() === null || exploreSession.path.length === 0) {
+	function getCurrentExploreStateKey() {
+		return isExploring() ? serializeSudokuState(exploreSession.current) : null;
+	}
+
+	function markExploreBoardChanged() {
+		newlyRecordedFailureState = null;
+		newlyRecordedFailurePath = null;
+	}
+
+	function rememberFailedExploreState(stateKey = getCurrentExploreStateKey()) {
+		if (!isExploring()) {
+			return;
+		}
+
+		const alreadyKnown = failedBoardStates.has(stateKey);
+		failedBoardStates.add(stateKey);
+		newlyRecordedFailureState = alreadyKnown ? null : stateKey;
+	}
+
+	function rememberFailedExplorePath(pathKey = serializeExplorePath(exploreSession.path)) {
+		if (!isExploring() || exploreSession.path.length === 0) {
+			return;
+		}
+
+		const alreadyKnown = failedExplorePaths.has(pathKey);
+		failedExplorePaths.add(pathKey);
+		newlyRecordedFailurePath = alreadyKnown ? null : pathKey;
+	}
+
+	function rememberFailedExploreBranch(reason = getImmediateExploreFailureReason()) {
+		if (!isExploring() || reason !== 'dead-end' || exploreSession.path.length === 0) {
 			return;
 		}
 
@@ -720,10 +753,26 @@ function createGameInstance({ sudoku, undoStack = [], redoStack = [], explore = 
 		decisionPoint.failedValues.push(latestBranch.value);
 	}
 
+	function recordCurrentExploreFailure() {
+		const reason = getImmediateExploreFailureReason();
+		if (reason === null) {
+			return null;
+		}
+
+		rememberFailedExploreState();
+
+		if (reason === 'dead-end') {
+			rememberFailedExplorePath();
+			rememberFailedExploreBranch(reason);
+		}
+
+		return reason;
+	}
+
 	function createDecisionPoint(move, candidates, snapshot) {
 		const normalizedMove = normalizeMove(move);
 
-		if (normalizedMove.value === 0 || candidates.length <= 1) {
+		if (normalizedMove.value === 0 || candidates.length <= 1 || !candidates.includes(normalizedMove.value)) {
 			return null;
 		}
 
@@ -755,6 +804,21 @@ function createGameInstance({ sudoku, undoStack = [], redoStack = [], explore = 
 			return false;
 		}
 
+		markExploreBoardChanged();
+
+		if (currentSudoku.getInvalidCells().length > 0) {
+			throw new DomainValidationError('Cannot enter explore while the main board has conflicts');
+		}
+
+		if (currentSudoku.isWon()) {
+			throw new DomainValidationError('Cannot enter explore after the main board is already solved');
+		}
+
+		const deterministicHint = currentSudoku.getNextHint({ detailLevel: 3 });
+		if (deterministicHint?.canApplyDirectly) {
+			throw new DomainValidationError('Cannot enter explore while a deterministic hint is available');
+		}
+
 		const origin = currentSudoku.clone();
 		exploreSession = {
 			origin,
@@ -783,7 +847,8 @@ function createGameInstance({ sudoku, undoStack = [], redoStack = [], explore = 
 		exploreSession.current.guess(normalizedMove);
 		exploreSession.redoStack.length = 0;
 		createDecisionPoint(normalizedMove, candidates, snapshot);
-		rememberFailedExploreBranch();
+		markExploreBoardChanged();
+		recordCurrentExploreFailure();
 		return true;
 	}
 
@@ -802,7 +867,7 @@ function createGameInstance({ sudoku, undoStack = [], redoStack = [], explore = 
 
 		exploreSession.redoStack.push(createExploreCheckpoint());
 		restoreExploreCheckpoint(exploreSession.undoStack.pop());
-		rememberFailedExploreBranch();
+		markExploreBoardChanged();
 		return true;
 	}
 
@@ -813,7 +878,7 @@ function createGameInstance({ sudoku, undoStack = [], redoStack = [], explore = 
 
 		exploreSession.undoStack.push(createExploreCheckpoint());
 		restoreExploreCheckpoint(exploreSession.redoStack.pop());
-		rememberFailedExploreBranch();
+		markExploreBoardChanged();
 		return true;
 	}
 
@@ -824,7 +889,7 @@ function createGameInstance({ sudoku, undoStack = [], redoStack = [], explore = 
 		exploreSession.redoStack.length = 0;
 		exploreSession.path = [];
 		exploreSession.focusedDecisionKey = null;
-		rememberFailedExploreBranch();
+		markExploreBoardChanged();
 		return true;
 	}
 
@@ -842,7 +907,7 @@ function createGameInstance({ sudoku, undoStack = [], redoStack = [], explore = 
 		const pathIndex = exploreSession.path.findIndex((entry) => entry.decisionKey === decisionPoint.key);
 		exploreSession.path = pathIndex === -1 ? [] : exploreSession.path.slice(0, pathIndex);
 		exploreSession.focusedDecisionKey = decisionPoint.key;
-		rememberFailedExploreBranch();
+		markExploreBoardChanged();
 		return true;
 	}
 
@@ -892,6 +957,7 @@ function createGameInstance({ sudoku, undoStack = [], redoStack = [], explore = 
 			return false;
 		}
 
+		markExploreBoardChanged();
 		exploreSession = null;
 		return true;
 	}
@@ -906,36 +972,45 @@ function createGameInstance({ sudoku, undoStack = [], redoStack = [], explore = 
 		historyUndo.push(currentSudoku.clone());
 		currentSudoku = exploreSession.current.clone();
 		historyRedo.length = 0;
+		markExploreBoardChanged();
 		exploreSession = null;
 		return true;
 	}
 
 	function getExploreFailureReason() {
-		const immediateFailureReason = getImmediateExploreFailureReason();
-		if (immediateFailureReason !== null) {
-			return immediateFailureReason;
+		if (!isExploring()) {
+			return null;
 		}
 
 		if (hasSeenFailedExplorePath()) {
 			return 'known-failed-path';
 		}
 
+		const stateKey = getCurrentExploreStateKey();
+		if (failedBoardStates.has(stateKey) && newlyRecordedFailureState !== stateKey) {
+			return 'known-failed-board';
+		}
+
+		const immediateFailureReason = getImmediateExploreFailureReason();
+		if (immediateFailureReason !== null) {
+			return immediateFailureReason;
+		}
+
 		return null;
 	}
 
 	function hasSeenFailedExplorePath() {
-		if (!isExploring()) {
+		if (!isExploring() || exploreSession.path.length === 0) {
 			return false;
 		}
 
-		for (const entry of exploreSession.path) {
-			const decisionPoint = decisionPointBook.get(entry.decisionKey);
-			if (decisionPoint && decisionPoint.failedValues.includes(entry.value)) {
-				return true;
-			}
-		}
+		const pathKey = serializeExplorePath(exploreSession.path);
+		return failedExplorePaths.has(pathKey) && newlyRecordedFailurePath !== pathKey;
+	}
 
-		return false;
+	function hasSeenFailedExploreBoard() {
+		const stateKey = getCurrentExploreStateKey();
+		return stateKey !== null && failedBoardStates.has(stateKey) && newlyRecordedFailureState !== stateKey;
 	}
 
 	function isExploreFailed() {
@@ -1010,23 +1085,9 @@ function createGameInstance({ sudoku, undoStack = [], redoStack = [], explore = 
 		};
 	}
 
-	function undo() {
-		if (!canUndo()) {
-			return;
-		}
+	function undo() { if (isExploring()) { return undoExplore(); } if (!canUndo()) { return; } historyRedo.push(currentSudoku.clone()); currentSudoku = historyUndo.pop(); }
 
-		historyRedo.push(currentSudoku.clone());
-		currentSudoku = historyUndo.pop();
-	}
-
-	function redo() {
-		if (!canRedo()) {
-			return;
-		}
-
-		historyUndo.push(currentSudoku.clone());
-		currentSudoku = historyRedo.pop();
-	}
+	function redo() { if (isExploring()) { return redoExplore(); } if (!canRedo()) { return; } historyUndo.push(currentSudoku.clone()); currentSudoku = historyRedo.pop(); }
 
 	function toJSON() {
 		const serializedDecisionPoints = Array.from(decisionPointBook.values()).map((decisionPoint) => ({
@@ -1045,10 +1106,14 @@ function createGameInstance({ sudoku, undoStack = [], redoStack = [], explore = 
 				undo: historyUndo.map((snapshot) => snapshot.toJSON()),
 				redo: historyRedo.map((snapshot) => snapshot.toJSON()),
 			},
-			explore: exploreSession || serializedDecisionPoints.length > 0 ? {
-				active: isExploring(),
-				decisionPoints: serializedDecisionPoints,
-				session: exploreSession ? {
+				explore: exploreSession || serializedDecisionPoints.length > 0 || failedBoardStates.size > 0 || failedExplorePaths.size > 0 ? {
+					active: isExploring(),
+					decisionPoints: serializedDecisionPoints,
+					failedBoardStates: Array.from(failedBoardStates),
+					failedExplorePaths: Array.from(failedExplorePaths),
+					newlyRecordedFailureState: isExploring() ? newlyRecordedFailureState : null,
+					newlyRecordedFailurePath: isExploring() ? newlyRecordedFailurePath : null,
+					session: exploreSession ? {
 					origin: exploreSession.origin.toJSON(),
 					current: exploreSession.current.toJSON(),
 					undo: exploreSession.undoStack.map((checkpoint) => ({
@@ -1087,14 +1152,14 @@ function createGameInstance({ sudoku, undoStack = [], redoStack = [], explore = 
 		get invalidCells() {
 			return getInvalidCells();
 		},
-		get won() {
-			return isWon();
-		},
+		get won() { return isMainWon(); },
 		getSudoku,
 		getActiveSudoku,
 		getInvalidCells,
 		isWon,
+		isMainWon,
 		getHint,
+		getCandidates,
 		propagateHint,
 		canUndo,
 		canRedo,
@@ -1117,6 +1182,7 @@ function createGameInstance({ sudoku, undoStack = [], redoStack = [], explore = 
 		commitExplore,
 		getExploreFailureReason,
 		isExploreFailed,
+		hasSeenFailedExploreBoard,
 		hasSeenFailedExplorePath,
 		toJSON,
 	};
@@ -1139,6 +1205,10 @@ export function createGameFromJSON(json) {
 	const undoStack = (json.history?.undo ?? []).map((snapshot) => createSudokuFromJSON(snapshot));
 	const redoStack = (json.history?.redo ?? []).map((snapshot) => createSudokuFromJSON(snapshot));
 	const explore = json.explore ? {
+		failedBoardStates: [...(json.explore.failedBoardStates ?? [])],
+		failedExplorePaths: [...(json.explore.failedExplorePaths ?? [])],
+		newlyRecordedFailureState: json.explore.newlyRecordedFailureState ?? null,
+		newlyRecordedFailurePath: json.explore.newlyRecordedFailurePath ?? null,
 		decisionPoints: (json.explore.decisionPoints ?? []).map((decisionPoint) => ({
 			key: decisionPoint.key,
 			row: decisionPoint.row,

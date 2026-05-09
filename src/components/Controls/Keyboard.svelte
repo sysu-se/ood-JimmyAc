@@ -14,12 +14,17 @@ import { highlight } from '@sudoku/stores/highlight';
 			let result;
 
 			if ($notes) {
+				if ($cursor.x === null || $cursor.y === null) {
+					feedback.warn('Select a cell first.');
+					return;
+				}
+
 				if (num === 0) {
 					candidates.clear($cursor);
 				} else {
 					candidates.add($cursor, num);
 				}
-				result = userGrid.guess($cursor, 0);
+				return;
 			} else {
 				if ($candidates.hasOwnProperty($cursor.x + ',' + $cursor.y)) {
 					candidates.clear($cursor);
@@ -33,9 +38,12 @@ import { highlight } from '@sudoku/stores/highlight';
 				highlight.focus(result.focusCell, 'fill');
 			} else if (result) {
 				feedback.error(result.message ?? 'Input rejected.');
-				if (result.focusCell) {
-					highlight.focus(result.focusCell, 'failed-path');
-				}
+				const kind = result.reason === 'invalid-cells' ? 'conflict' : (result.reason === 'known-failed-board' ? 'failed-board' : 'failed-path');
+				highlight.set({
+					primaryCell: result.focusCell,
+					cells: result.cells ?? (result.focusCell ? [result.focusCell] : []),
+					kind,
+				});
 			}
 		}
 	}

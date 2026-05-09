@@ -44,7 +44,7 @@
 		     class:fill-highlight={highlighted && highlightKind === 'fill'}
 		     class:auto-highlight={highlighted && (highlightKind === 'auto-step' || highlightKind === 'auto-stop')}
 		     class:decision-highlight={highlighted && highlightKind === 'decision'}
-		     class:failure-highlight={highlighted && (highlightKind === 'conflict' || highlightKind === 'dead-end' || highlightKind === 'failed-path')}>
+		     class:failure-highlight={highlighted && (highlightKind === 'conflict' || highlightKind === 'dead-end' || highlightKind === 'failed-path' || highlightKind === 'failed-board')}>
 
 			<button class="cell-btn" on:click={cursor.set(cellX - 1, cellY - 1)}>
 				{#if candidates}

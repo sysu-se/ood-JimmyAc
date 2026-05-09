@@ -26,6 +26,27 @@
 		return values && values.length > 0 ? values.join(', ') : '-';
 	}
 
+	function hintInfo(hint) {
+		if (!hint) {
+			return { label: 'Candidate info', text: '-' };
+		}
+
+		if (Array.isArray(hint.candidates)) {
+			return { label: 'Candidates', text: values(hint.candidates) };
+		}
+
+		if (Number.isInteger(hint.candidateCount)) {
+			return { label: 'Candidate count', text: `${hint.candidateCount}` };
+		}
+
+		return { label: 'Candidate info', text: 'Hidden at this hint level' };
+	}
+
+	function hintSummary(hint, mode, cell) {
+		const info = hintInfo(hint);
+		return `${mode} ${cellLabel(cell)} | ${info.label.toLowerCase()}: ${info.text}`;
+	}
+
 	function focusCell(cell, kind) {
 		if (!cell) {
 			return;
@@ -43,8 +64,9 @@
 		}
 
 		const cell = { row: hint.row, col: hint.col };
-		const summary = `${mode} ${cellLabel(cell)} | candidates: ${values(hint.candidates)}`;
-		detail = { mode, hint, cell, summary };
+		const info = hintInfo(hint);
+		const summary = hintSummary(hint, mode, cell);
+		detail = { mode, hint, cell, summary, info };
 		feedback.info(summary, { hint });
 		focusCell(cell, mode === 'Auto' ? 'auto-stop' : 'hint');
 	}
@@ -60,16 +82,18 @@
 			return;
 		}
 
-		const hint = userGrid.getHint({ detailLevel: 3 });
+		const hint = userGrid.getHint({ detailLevel });
 		const mode = `L${detailLevel}`;
 		updateHintDetail(hint, mode);
-		consumeHintIfVisible();
+		if (hint) {
+			consumeHintIfVisible();
+		}
 	}
 
 	function showFailure(failure, prefix = 'Auto stopped') {
 		const kind = failure.reason === 'invalid-cells'
 			? 'conflict'
-			: (failure.reason === 'dead-end' ? 'dead-end' : 'failed-path');
+			: (failure.reason === 'dead-end' ? 'dead-end' : (failure.reason === 'known-failed-board' ? 'failed-board' : 'failed-path'));
 		const cells = failure.cells ?? [];
 		const focus = failure.focusCell ?? cells[0] ?? null;
 
@@ -79,9 +103,14 @@
 
 		highlight.set({ primaryCell: focus, cells, kind });
 
-		const message = failure.reason === 'invalid-cells'
-			? `${prefix}: conflict at ${cells.map(cellLabel).join(', ')}`
-			: `${prefix}: ${failure.reason} at ${cellLabel(focus)}`;
+		let message = `${prefix}: ${failure.reason} at ${cellLabel(focus)}`;
+		if (failure.reason === 'invalid-cells') {
+			message = `${prefix}: conflict at ${cells.map(cellLabel).join(', ')}`;
+		} else if (failure.reason === 'known-failed-board') {
+			message = `${prefix}: this board state already failed earlier.`;
+		} else if (failure.reason === 'known-failed-path') {
+			message = `${prefix}: this explore path already failed earlier.`;
+		}
 
 		detail = { mode: 'Auto', summary: message, failure };
 		feedback.error(message);
@@ -196,8 +225,10 @@
 		<p class="detail-title">Current Hint</p>
 		{#if detail?.hint}
 			<p><strong>Cell:</strong> {cellLabel(detail.cell ?? { row: detail.hint.row, col: detail.hint.col })}</p>
-			<p><strong>Type:</strong> {detail.hint.type}</p>
-			<p><strong>Candidates:</strong> {values(detail.hint.candidates)}</p>
+			{#if detail.hint.type}
+				<p><strong>Type:</strong> {detail.hint.type}</p>
+			{/if}
+			<p><strong>{detail.info?.label ?? hintInfo(detail.hint).label}:</strong> {detail.info?.text ?? hintInfo(detail.hint).text}</p>
 			<p><strong>Summary:</strong> {detail.summary}</p>
 		{:else if detail}
 			<p>{detail.summary}</p>

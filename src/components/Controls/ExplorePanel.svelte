@@ -6,6 +6,7 @@
 		exploreFailureReason,
 		exploring,
 		knownFailedExplorePath,
+		knownFailedExploreBoard,
 		userGrid,
 	} from '@sudoku/stores/grid';
 	import { cursor } from '@sudoku/stores/cursor';
@@ -14,8 +15,10 @@
 	import { gamePaused } from '@sudoku/stores/game';
 
 	$: decisionPoint = $currentDecisionPoint;
-	$: status = $exploreFailed ? 'FAILED' : ($knownFailedExplorePath ? 'SEEN' : ($exploring ? 'ON' : 'OFF'));
 	$: reason = $exploreFailureReason ?? 'none';
+	$: status = reason === 'known-failed-board' || reason === 'known-failed-path'
+		? 'SEEN'
+		: ($exploreFailed ? 'FAILED' : ($exploring ? 'ON' : 'OFF'));
 	$: candidateStates = buildCandidateStates(decisionPoint);
 
 	function cellLabel(cell) {
@@ -75,10 +78,14 @@
 	}
 
 	function enterExplore() {
-		if (userGrid.enterExplore()) {
+		const result = userGrid.enterExplore();
+		if (result.ok) {
 			feedback.info('Explore mode started. Inputs now edit a temporary board.');
 			highlight.clear();
+			return;
 		}
+
+		feedback.warn(result.message ?? 'Explore cannot start yet. Apply deterministic hints first.');
 	}
 
 	function resetExplore() {
@@ -116,7 +123,7 @@
 		highlight.set({
 			primaryCell: result.focusCell,
 			cells: result.cells ?? (result.focusCell ? [result.focusCell] : []),
-			kind: result.reason === 'invalid-cells' ? 'conflict' : 'failed-path',
+			kind: result.reason === 'invalid-cells' ? 'conflict' : (result.reason === 'known-failed-board' ? 'failed-board' : 'failed-path'),
 		});
 		feedback.error(result.message ?? 'Cannot commit explore state.');
 	}
